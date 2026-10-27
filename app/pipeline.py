@@ -27,6 +27,8 @@ from voice.tts import TTSAudioResult
 from agents.bus import AgentMessageBus
 from agents.context import SharedBoundedContext
 from agents.message import AgentId, AgentMessage, MessageType
+from agents.learner import ContextLearner
+from ai.prompts import build_miss_minutes_prompt, build_jarvis_prompt, MISS_MINUTES_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,7 @@ class CapabilityPipeline:
         self.voice_service = voice_service or VoiceService(is_assistant_online=False)
         self.bus = message_bus or AgentMessageBus()
         self.context = context if context is not None else SharedBoundedContext(max_turns=10)
+        self.learner = ContextLearner()
 
     def execute_voice_pipeline(
         self,
@@ -169,6 +172,17 @@ class CapabilityPipeline:
         # 2. Multilingual Intent Parsing
         intent = self.intent_parser.parse(clean_input)
 
+        # 2b. Adaptive Context Learning & Alias Resolution
+        self.learner.learn_from_interaction(
+            user_utterance=clean_input,
+            detected_language=intent.language.value,
+            executed_app=intent.entities.app_name or intent.entities.target,
+        )
+        if intent.entities.app_name:
+            intent.entities.app_name = self.learner.resolve_alias(intent.entities.app_name)
+        if intent.entities.target:
+            intent.entities.target = self.learner.resolve_alias(intent.entities.target)
+
         result = PipelineExecutionResult(
             raw_transcript=clean_input,
             language=intent.language,
@@ -187,9 +201,9 @@ class CapabilityPipeline:
             # Voice synthesis via turn taking
             try:
                 self.voice_service.set_online(True)
-                result.tts_result = self.voice_service.speak_text(
-                    result.miss_minutes_response,
-                    agent_name="miss_minutes",
+                self.voice_service.speak_turn_taking(
+                    miss_minutes_text=result.miss_minutes_response,
+                    jarvis_text=result.jarvis_response,
                     language="te",
                 )
             except Exception as exc:
@@ -202,10 +216,10 @@ class CapabilityPipeline:
             ai_resp_content = ""
 
             if self.ai_provider and self.ai_provider.is_available():
-                from ai.prompts import MISS_MINUTES_SYSTEM_PROMPT
                 from ai.provider import ModelConfig
+                user_ctx = self.learner.get_llm_context_prompt()
                 cfg = ModelConfig(
-                    system_instruction=MISS_MINUTES_SYSTEM_PROMPT,
+                    system_instruction=build_miss_minutes_prompt(user_ctx),
                     temperature=0.7,
                     max_tokens=400,
                 )
@@ -226,7 +240,8 @@ class CapabilityPipeline:
                 query_topic = intent.entities.query or clean_input
                 from actions.researcher import RapidResearcher
                 researcher = RapidResearcher(ai_provider=self.ai_provider)
-                res_data = researcher.research(topic=query_topic)
+                user_ctx = self.learner.get_llm_context_prompt()
+                res_data = researcher.research(topic=query_topic, user_context_prompt=user_ctx)
                 findings = res_data.get("summary", f"{query_topic} gurinchi information gather chesamu.")
 
                 result.miss_minutes_response = f"Manchi question sugar! {query_topic} gurinchi Jarvis research details share chestharu choodandi."
@@ -259,13 +274,14 @@ class CapabilityPipeline:
                 content=result.miss_minutes_response,
             ))
 
-            # Voice synthesis
+            # Voice synthesis via sequential turn-taking
             try:
                 self.voice_service.set_online(True)
-                result.tts_result = self.voice_service.speak_text(
-                    result.miss_minutes_response,
-                    agent_name="miss_minutes",
-                    language="te",
+                is_te = intent.language in (LanguageCode.TE, LanguageCode.TE_EN)
+                self.voice_service.speak_turn_taking(
+                    miss_minutes_text=result.miss_minutes_response,
+                    jarvis_text=result.jarvis_response,
+                    language="te" if is_te else "en",
                 )
             except Exception as exc:
                 logger.warning("TTS synthesis skipped: %s", exc)

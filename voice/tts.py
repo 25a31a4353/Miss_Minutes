@@ -61,8 +61,10 @@ class EdgeTTSProvider(TextToSpeechProvider):
     Supports high-quality multilingual neural voices for English and Telugu.
     """
 
-    def __init__(self):
+    def __init__(self, cache_size: int = 128):
         self._available: Optional[bool] = None
+        self._cache: dict[tuple[str, str, str, str], bytes] = {}
+        self._cache_size = cache_size
 
     @property
     def provider_id(self) -> str:
@@ -93,6 +95,17 @@ class EdgeTTSProvider(TextToSpeechProvider):
         profile = voice_profile or get_voice_profile("miss_minutes")
         voice_name = profile.get_voice_for_language(language)
 
+        # Check in-memory cache for zero-lag playback
+        cache_key = (text.strip(), voice_name, profile.rate, profile.pitch)
+        if cache_key in self._cache:
+            return TTSAudioResult(
+                audio_bytes=self._cache[cache_key],
+                sample_rate=24000,
+                voice_used=voice_name,
+                duration_seconds=max(0.5, len(text.split()) * 0.35),
+                text=text,
+            )
+
         async def _run_synthesis() -> bytes:
             communicate = edge_tts.Communicate(
                 text=text,
@@ -112,6 +125,15 @@ class EdgeTTSProvider(TextToSpeechProvider):
         except Exception as exc:
             logger.error("edge-tts synthesis failed: %s", exc)
             raise RuntimeError(f"edge-tts error: {exc}") from exc
+
+        # Cache result (LRU eviction if at capacity)
+        if len(self._cache) >= self._cache_size:
+            try:
+                first_key = next(iter(self._cache))
+                del self._cache[first_key]
+            except (StopIteration, KeyError):
+                pass
+        self._cache[cache_key] = audio_bytes
 
         return TTSAudioResult(
             audio_bytes=audio_bytes,

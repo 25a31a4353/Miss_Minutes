@@ -72,6 +72,10 @@ def get_ai_provider() -> AIProvider:
     if groq_key and groq_key.strip():
         secondary = GroqProvider(api_key=groq_key.strip())
 
+    from ai.free_intelligence import FreeIntelligenceProvider
+
+    tertiary = FreeIntelligenceProvider()
+
     fallback = MockAIProvider(
         default_text_response="All parameters verified, sir. Standing by for your instructions."
     )
@@ -79,6 +83,7 @@ def get_ai_provider() -> AIProvider:
     _provider = ResilientAIProvider(
         primary=primary,
         secondary=secondary,
+        tertiary=tertiary,
         fallback=fallback,
     )
     return _provider

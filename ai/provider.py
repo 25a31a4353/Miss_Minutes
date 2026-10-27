@@ -90,6 +90,14 @@ class AIProvider(ABC):
         """
         pass
 
+    def generate_text(
+        self,
+        prompt: str,
+        config: Optional[ModelConfig] = None,
+    ) -> ProviderResponse:
+        """Convenience alias for generate_response."""
+        return self.generate_response(prompt, config=config)
+
     def generate_stream(
         self,
         prompt: str,

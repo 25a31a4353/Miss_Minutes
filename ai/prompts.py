@@ -54,3 +54,18 @@ Rules:
 - Map entities accurately (query, target, app_name, volume_level).
 - Assign 'preferred_agent': 'miss_minutes' for conversational/chat/questions, or 'jarvis' for system/app/media actions.
 """.strip()
+
+
+def build_miss_minutes_prompt(learned_context: str = "") -> str:
+    """Builds the active system prompt for Miss Minutes with user-adapted context."""
+    if not learned_context:
+        return MISS_MINUTES_SYSTEM_PROMPT
+    return f"{MISS_MINUTES_SYSTEM_PROMPT}\n\n{learned_context}"
+
+
+def build_jarvis_prompt(learned_context: str = "") -> str:
+    """Builds the active system prompt for Jarvis with user-adapted context."""
+    if not learned_context:
+        return JARVIS_SYSTEM_PROMPT
+    return f"{JARVIS_SYSTEM_PROMPT}\n\n{learned_context}"
+

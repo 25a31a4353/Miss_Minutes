@@ -34,36 +34,32 @@ class ResilientAIProvider(AIProvider):
         primary: Optional[AIProvider] = None,
         secondary: Optional[AIProvider] = None,
         fallback: Optional[AIProvider] = None,
+        tertiary: Optional[AIProvider] = None,
+        providers: Optional[List[AIProvider]] = None,
     ):
+        if providers:
+            self._providers = [p for p in providers if p is not None]
+        else:
+            self._providers = [p for p in (primary, secondary, tertiary, fallback) if p is not None]
         self.primary = primary
         self.secondary = secondary
+        self.tertiary = tertiary
         self.fallback = fallback
 
     @property
     def provider_id(self) -> str:
-        # Returns active provider id if available
-        if self.primary and self.primary.is_available():
-            return f"resilient({self.primary.provider_id})"
-        if self.secondary and self.secondary.is_available():
-            return f"resilient({self.secondary.provider_id})"
-        if self.fallback and self.fallback.is_available():
-            return f"resilient({self.fallback.provider_id})"
+        for p in self._providers:
+            if p.is_available():
+                return f"resilient({p.provider_id})"
         return "resilient(unavailable)"
 
     def is_available(self) -> bool:
         """Returns True if at least one underlying provider is available."""
-        return any(
-            p is not None and p.is_available()
-            for p in (self.primary, self.secondary, self.fallback)
-        )
+        return any(p.is_available() for p in self._providers)
 
     def _get_candidate_chain(self) -> List[AIProvider]:
         """Returns available providers in strict priority order."""
-        candidates = []
-        for p in (self.primary, self.secondary, self.fallback):
-            if p is not None and p.is_available():
-                candidates.append(p)
-        return candidates
+        return [p for p in self._providers if p.is_available()]
 
     def generate_response(
         self,
