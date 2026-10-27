@@ -125,3 +125,20 @@ def test_pipeline_adaptive_learning_flow():
     # Ensure learner recorded the interaction
     assert pipeline.learner.interaction_count >= 1
     assert "workload" in pipeline.learner.vocabulary_counts
+
+
+def test_openai_and_huggingface_providers():
+    """Verifies that OpenAIProvider and HuggingFaceProvider initialize and execute safely."""
+    from ai.openai_provider import OpenAIProvider
+    from ai.hf_provider import HuggingFaceProvider
+
+    # 1. OpenAI provider with mock key
+    oa = OpenAIProvider(api_key="sk-test-key", default_model="gpt-4o-mini")
+    assert oa.provider_id == "openai"
+    assert oa.is_available() is True
+
+    # 2. Hugging Face provider with mock token
+    hf = HuggingFaceProvider(api_token="hf_test_token", default_model="meta-llama/Llama-3.3-70B-Instruct")
+    assert hf.provider_id == "huggingface"
+    assert hf.is_available() is True
+

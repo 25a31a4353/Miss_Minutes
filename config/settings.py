@@ -50,6 +50,11 @@ class AppSettings:
     gemini_model: str = "gemini-2.5-flash"
     max_conversation_turns: int = 10
     groq_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    openai_model: str = "gpt-4o-mini"
+    openai_base_url: Optional[str] = None
+    hf_token: Optional[str] = None
+    hf_model: str = "meta-llama/Llama-3.3-70B-Instruct"
     always_on_top: bool = True
     overlay_opacity: float = 0.98
     start_state: str = "OFFLINE"
@@ -67,9 +72,19 @@ class AppSettings:
         return bool(self.groq_api_key and self.groq_api_key.strip())
 
     @property
+    def has_openai(self) -> bool:
+        """Returns True if a non-empty OpenAI API key is configured."""
+        return bool(self.openai_api_key and self.openai_api_key.strip())
+
+    @property
+    def has_hf(self) -> bool:
+        """Returns True if a non-empty Hugging Face token is configured."""
+        return bool(self.hf_token and self.hf_token.strip())
+
+    @property
     def has_any_provider(self) -> bool:
         """Returns True if at least one AI provider is configured."""
-        return self.has_gemini or self.has_groq
+        return self.has_gemini or self.has_groq or self.has_openai or self.has_hf
 
     def is_provider_configured(self, provider_id: str) -> bool:
         """Checks if the requested provider ID has valid configuration."""
@@ -78,6 +93,10 @@ class AppSettings:
             return self.has_gemini
         if pid == "groq":
             return self.has_groq
+        if pid == "openai":
+            return self.has_openai
+        if pid in ("hf", "huggingface"):
+            return self.has_hf
         return False
 
 
@@ -137,6 +156,11 @@ def load_settings(env_path: Optional[Path | str] = None) -> AppSettings:
         gemini_model=get_val("GEMINI_MODEL", "gemini-2.5-flash").strip(),
         max_conversation_turns=_parse_int(get_val("MAX_CONVERSATION_TURNS", "10"), default=10),
         groq_api_key=get_opt_val("GROQ_API_KEY"),
+        openai_api_key=get_opt_val("OPENAI_API_KEY"),
+        openai_model=get_val("OPENAI_MODEL", "gpt-4o-mini").strip(),
+        openai_base_url=get_opt_val("OPENAI_BASE_URL"),
+        hf_token=get_opt_val("HF_TOKEN") or get_opt_val("HUGGINGFACE_API_KEY"),
+        hf_model=get_val("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct").strip(),
         always_on_top=_parse_bool(get_val("APP_ALWAYS_ON_TOP", "true"), default=True),
         overlay_opacity=_parse_float(get_val("APP_OVERLAY_OPACITY", "0.98"), default=0.98),
         start_state=get_val("APP_START_STATE", "OFFLINE").upper(),

@@ -89,19 +89,22 @@ Jarvis operates in a collaborative dual-agent model where Miss Minutes acts as t
 Jarvis utilizes the unified `AIProvider` abstraction with a resilient three-tier failover hierarchy:
 
 ```text
-AIProvider (ResilientAIProvider)
-  ├── 1. Primary: Google Gemini (Official google-genai SDK, gemini-2.5-flash)
-  ├── 2. Secondary: Groq Fallback (High-speed cloud inference, llama-3.3-70b-versatile)
-  └── 3. Tertiary: MockAIProvider / Local Deterministic Engine (Offline & Test Safe)
+AIProvider (ResilientAIProvider Multi-Tier Intelligence)
+  ├── 1. Google Gemini (Official google-genai SDK: gemini-2.5-flash, gemini-2.0-flash)
+  ├── 2. OpenAI & Local Models (Official openai SDK: gpt-4o, gpt-4o-mini, local Ollama)
+  ├── 3. Groq Fast Cloud Inference (llama-3.3-70b-versatile, llama-3.1-8b-instant at 800+ tok/s)
+  ├── 4. Hugging Face Hub (huggingface_hub Serverless Inference: Llama-3.3-70B, Qwen-2.5-72B)
+  ├── 5. Free Public AI (Key-free high-speed inference: openai-fast, mistral)
+  └── 6. Safe Deterministic Mock (Offline & hardware-isolated test engine)
 ```
 
-### 4.1 Multilingual Understanding
-Jarvis understands user requests in:
+### 4.1 Multilingual Understanding & Adaptive Context Learning
+Jarvis and Miss Minutes understand user requests in:
 - **English:** *"Check market report for Reliance and Nvidia."*
 - **Telugu:** *"Stock market samacharam ela undi?"*
 - **Telugu-English Mixed Speech:** *"YouTube lo songs play cheyyadaniki ready cheyyi."*
 
-Transcripts are processed verbatim without early forced translation into English, preserving cultural context and technical nomenclature (Python, API, Gemini, Docker, Nifty).
+Transcripts are processed verbatim without early forced translation into English, preserving cultural context and technical nomenclature (Python, API, Gemini, Docker, Nifty). The `ContextLearner` continuously extracts your favorite idioms, learns personal facts, and registers custom shortcuts (e.g. *"wa ante whatsapp"*).
 
 ### 4.2 Bounded Conversation Memory
 - History is maintained in thread-safe, memory-bounded ring buffers (`SharedBoundedContext`, default 10 turns).

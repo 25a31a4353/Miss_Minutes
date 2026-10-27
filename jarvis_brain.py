@@ -61,31 +61,45 @@ def get_ai_provider() -> AIProvider:
     if _provider is not None:
         return _provider
 
-    primary: Optional[AIProvider] = None
+    providers: list[AIProvider] = []
+
+    # 1. Google Gemini
     gemini_key = os.environ.get("GEMINI_API_KEY")
     gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
     if gemini_key and gemini_key.strip():
-        primary = GeminiProvider(api_key=gemini_key.strip(), default_model=gemini_model)
+        providers.append(GeminiProvider(api_key=gemini_key.strip(), default_model=gemini_model))
 
-    secondary: Optional[AIProvider] = None
+    # 2. OpenAI / Ollama / OpenRouter
+    from ai.openai_provider import OpenAIProvider
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    openai_base = os.environ.get("OPENAI_BASE_URL")
+    openai_model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    if (openai_key and openai_key.strip()) or openai_base:
+        providers.append(OpenAIProvider(api_key=openai_key, base_url=openai_base, default_model=openai_model))
+
+    # 3. Groq Fast Inference
     groq_key = os.environ.get("GROQ_API_KEY") or _get_api_key()
     if groq_key and groq_key.strip():
-        secondary = GroqProvider(api_key=groq_key.strip())
+        providers.append(GroqProvider(api_key=groq_key.strip()))
 
+    # 4. Hugging Face Serverless Inference
+    from ai.hf_provider import HuggingFaceProvider
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_API_KEY")
+    hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
+    if hf_token and hf_token.strip():
+        providers.append(HuggingFaceProvider(api_token=hf_token.strip(), default_model=hf_model))
+
+    # 5. Free High-Speed Intelligence
     from ai.free_intelligence import FreeIntelligenceProvider
+    providers.append(FreeIntelligenceProvider())
 
-    tertiary = FreeIntelligenceProvider()
-
+    # 6. Deterministic Mock Fallback
     fallback = MockAIProvider(
         default_text_response="All parameters verified, sir. Standing by for your instructions."
     )
+    providers.append(fallback)
 
-    _provider = ResilientAIProvider(
-        primary=primary,
-        secondary=secondary,
-        tertiary=tertiary,
-        fallback=fallback,
-    )
+    _provider = ResilientAIProvider(providers=providers)
     return _provider
 
 
