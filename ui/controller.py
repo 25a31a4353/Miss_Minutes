@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -97,6 +98,7 @@ class MissMinutesController(QWidget):
     delegation_demo_requested = Signal()
     capability_demo_requested = Signal()
     voice_session_requested = Signal()
+    command_submitted = Signal(str)
 
     def __init__(
         self,
@@ -115,7 +117,7 @@ class MissMinutesController(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
 
         # Compact size
-        self.setFixedSize(310, 365)
+        self.setFixedSize(315, 415)
         self.setStyleSheet(Theme.controller_stylesheet())
 
         self._build_ui()
@@ -186,6 +188,22 @@ class MissMinutesController(QWidget):
         card_layout.addWidget(self._msg_label)
 
         main_layout.addWidget(status_card)
+
+        # 3b. Interactive Command & Search Bar
+        cmd_layout = QHBoxLayout()
+        cmd_layout.setSpacing(4)
+        self._cmd_input = QLineEdit()
+        self._cmd_input.setObjectName("CmdInput")
+        self._cmd_input.setPlaceholderText("Type command (Chrome, WhatsApp, Screen)...")
+        self._cmd_input.setStyleSheet("background-color: #1a1512; color: #fdf8f0; border: 1px solid #b45309; border-radius: 4px; padding: 4px 6px; font-size: 11px;")
+        self._send_btn = QPushButton("Send")
+        self._send_btn.setObjectName("SendBtn")
+        self._send_btn.setStyleSheet("background-color: #f59e0b; color: #1a1512; font-weight: bold; border-radius: 4px; padding: 4px 8px; font-size: 11px;")
+        self._send_btn.clicked.connect(self._on_send_command)
+        self._cmd_input.returnPressed.connect(self._on_send_command)
+        cmd_layout.addWidget(self._cmd_input, 1)
+        cmd_layout.addWidget(self._send_btn)
+        main_layout.addLayout(cmd_layout)
 
         # 4. Interactive State Simulator Section
         sim_header = QLabel("VISUAL STATE SIMULATOR (12 STATES)")
@@ -314,6 +332,12 @@ class MissMinutesController(QWidget):
 
     def _on_power_clicked(self) -> None:
         self._state_machine.toggle_power()
+
+    def _on_send_command(self) -> None:
+        text = self._cmd_input.text().strip()
+        if text and self._state_machine.is_online:
+            self._cmd_input.clear()
+            self.command_submitted.emit(text)
 
     def _on_delegation_clicked(self) -> None:
         if self._state_machine.is_online:

@@ -98,9 +98,9 @@ class ContinuousVoiceListener(QThread):
             import sounddevice as sd
             import numpy as np
 
-            # Dynamic energy threshold
-            ambient_energy = 250.0
-            energy_threshold = 450.0
+            # Dynamic energy threshold calibrated for Windows microphones
+            ambient_energy = 220.0
+            energy_threshold = 320.0
 
             recording_frames: list[bytes] = []
             is_speaking = False
@@ -116,8 +116,7 @@ class ContinuousVoiceListener(QThread):
                 while self._running:
                     # Echo guard or offline check
                     if self._paused or not self._online:
-                        time.sleep(0.05)
-                        # Clear buffer so backlog isn't processed
+                        time.sleep(0.04)
                         if recording_frames:
                             recording_frames.clear()
                             is_speaking = False
@@ -137,10 +136,10 @@ class ContinuousVoiceListener(QThread):
                     sum_squares = sum(s * s for s in shorts)
                     rms = math.sqrt(sum_squares / count)
 
-                    # Update ambient noise floor slowly
+                    # Update ambient noise floor slowly when quiet
                     if not is_speaking:
-                        ambient_energy = 0.95 * ambient_energy + 0.05 * min(rms, 1500.0)
-                        energy_threshold = max(380.0, ambient_energy * 1.8)
+                        ambient_energy = 0.96 * ambient_energy + 0.04 * min(rms, 500.0)
+                        energy_threshold = max(260.0, ambient_energy * 1.30)
 
                     # Voice Activity Detection
                     if rms > energy_threshold:
@@ -159,12 +158,19 @@ class ContinuousVoiceListener(QThread):
                         elif time.time() - silence_start_time >= self._silence_threshold_sec:
                             # Speech ended!
                             duration = time.time() - speech_start_time
-                            if duration >= 0.5 and recording_frames:
+                            if duration >= 0.35 and recording_frames:
                                 raw_pcm = b"".join(recording_frames)
-                                wav_bytes = create_wav_bytes(raw_pcm, sample_rate=self._sample_rate)
-                                # Only dispatch if not in quiet mode
-                                if not self._is_quiet:
-                                    logger.info("Speech utterance captured (%.2fs), emitting.", duration)
+                                # Check total speech RMS
+                                c = len(raw_pcm) // 2
+                                if c > 0:
+                                    s_arr = struct.unpack(f"<{c}h", raw_pcm[:c*2])
+                                    total_rms = math.sqrt(sum(s * s for s in s_arr) / c)
+                                else:
+                                    total_rms = 0.0
+
+                                if total_rms >= 180.0 and not self._is_quiet:
+                                    wav_bytes = create_wav_bytes(raw_pcm, sample_rate=self._sample_rate)
+                                    logger.info("Speech utterance captured (%.2fs, rms=%.1f), emitting.", duration, total_rms)
                                     self.speech_detected.emit(wav_bytes)
 
                             # Reset state for next phrase

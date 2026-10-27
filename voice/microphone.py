@@ -121,55 +121,37 @@ class MicrophoneDevice:
             return data
 
         self.start_capture()
-        captured_chunks = []
 
+        # 1. Primary: Direct sounddevice WASAPI capture (16kHz, mono, int16)
         try:
-            from PySide6.QtCore import QBuffer, QByteArray, QIODevice
-            from PySide6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
+            import sounddevice as sd
+            import numpy as np
 
-            fmt = QAudioFormat()
-            fmt.setSampleRate(self._sample_rate)
-            fmt.setChannelCount(self._channels)
-            fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-
-            default_dev = QMediaDevices.defaultAudioInput()
-            if not default_dev or not default_dev.isFormatSupported(fmt):
-                # Fallback format if needed
-                fmt = default_dev.preferredFormat() if default_dev else fmt
-
-            self._audio_source = QAudioSource(default_dev, fmt)
-            qbyte_array = QByteArray()
-            qbuffer = QBuffer(qbyte_array)
-            qbuffer.open(QIODevice.OpenModeFlag.ReadWrite)
-
-            self._audio_source.start(qbuffer)
-
-            # Record for duration with frequent checks of online status and timeout
-            # Keep Qt event queue running so QAudioSource receives OS driver buffers
-            from PySide6.QtCore import QCoreApplication
+            data = sd.rec(
+                int(timeout_seconds * self._sample_rate),
+                samplerate=self._sample_rate,
+                channels=self._channels,
+                dtype="int16",
+            )
 
             start_time = time.time()
             while time.time() - start_time < timeout_seconds:
                 if not self._online or not self._is_capturing:
+                    sd.stop()
                     break
-                QCoreApplication.processEvents()
                 time.sleep(0.04)
 
-            self._audio_source.stop()
-            raw_pcm = bytes(qbyte_array.data())
-            qbuffer.close()
+            sd.wait()
+            raw_pcm = data.tobytes()
+            if raw_pcm:
+                return create_wav_bytes(raw_pcm, sample_rate=self._sample_rate, channels=self._channels)
+        except Exception as sd_err:
+            logger.debug("sounddevice recording exception, falling back: %s", sd_err)
 
-            if not raw_pcm:
-                # If buffer is empty (e.g. muted virtual mic), return minimal silent WAV
-                silent_pcm = b"\x00" * int(self._sample_rate * 0.5 * 2)
-                return create_wav_bytes(silent_pcm, sample_rate=self._sample_rate)
-
-            return create_wav_bytes(raw_pcm, sample_rate=self._sample_rate)
-
-        except Exception as exc:
-            logger.warning("Native microphone capture fallback: %s", exc)
-            # Safe synthetic silent WAV fallback (prevents application crash)
+        # 2. Fallback: return minimal silence
+        try:
             silent_pcm = b"\x00" * int(self._sample_rate * 0.5 * 2)
             return create_wav_bytes(silent_pcm, sample_rate=self._sample_rate)
         finally:
             self.stop_capture()
+

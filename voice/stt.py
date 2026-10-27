@@ -109,6 +109,19 @@ class MultilingualGoogleSTTProvider(SpeechToTextProvider):
         import speech_recognition as sr
         r = sr.Recognizer()
 
+        # Fast silence guard to eliminate network lag on inaudible chunks
+        if isinstance(audio_data, bytes):
+            pcm = audio_data[44:] if audio_data.startswith(b"RIFF") else audio_data
+            if len(pcm) < 3200:  # < 0.1s
+                return TranscriptionResult(raw_text="", language="en", confidence=0.0)
+            import math, struct
+            c = len(pcm) // 2
+            if c > 0:
+                shorts = struct.unpack(f"<{c}h", pcm[:c*2])
+                rms = math.sqrt(sum(s * s for s in shorts) / c)
+                if rms < 150.0:
+                    return TranscriptionResult(raw_text="", language="en", confidence=0.0)
+
         # Handle in-memory bytes vs file path
         temp_wav: Optional[str] = None
         if isinstance(audio_data, bytes):
@@ -134,8 +147,12 @@ class MultilingualGoogleSTTProvider(SpeechToTextProvider):
                     if text:
                         detected_lang = "te" if lang.startswith("te") else "en"
                         break
-                except Exception:
+                except sr.UnknownValueError:
+                    # Google could not understand audio in this language, try next
                     continue
+                except Exception as net_err:
+                    logger.debug("Google STT recognition error for %s: %s", lang, net_err)
+                    break
 
             if text:
                 # Code-switching detection

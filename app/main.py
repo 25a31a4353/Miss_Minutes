@@ -128,6 +128,7 @@ class MissMinutesApp(QObject):
         self._controller.delegation_demo_requested.connect(self.run_delegation_demo)
         self._controller.capability_demo_requested.connect(self.run_capability_demo)
         self._controller.voice_session_requested.connect(self.run_voice_interaction)
+        self._controller.command_submitted.connect(self.run_text_interaction)
         self._overlay.voice_session_requested.connect(self.run_voice_interaction)
 
         # Position persistence signals
@@ -253,15 +254,9 @@ class MissMinutesApp(QObject):
                 return res
 
             if not res.raw_transcript:
-                fallback_text = res.miss_minutes_response or "I didn't quite catch that, sugar. Could you say that again?"
-                self._state_machine.transition_to(AssistantState.SPEAKING, fallback_text)
-                QCoreApplication.processEvents()
-                try:
-                    self._voice_service.speak_text_blocking(fallback_text, agent_name="miss_minutes", language="te")
-                except Exception:
-                    pass
-                self._state_machine.transition_to(AssistantState.IDLE, fallback_text)
+                self._state_machine.transition_to(AssistantState.IDLE, "Ready and listening...")
                 return res
+
 
             # 4. Sequential Turn-Taking Speech Output (Miss Minutes then Jarvis)
             # Step 4a: Miss Minutes speaks first
@@ -324,6 +319,85 @@ class MissMinutesApp(QObject):
             # Resume hands-free listening
             if hasattr(self, "_continuous_listener"):
                 self._continuous_listener.resume_listening()
+
+    def run_text_interaction(self, command_text: str) -> Optional[PipelineExecutionResult]:
+        """
+        Executes an end-to-end command submitted via text from the UI controller.
+        Runs through intent understanding, technical execution, screen reading, or web search,
+        and provides audio + visual turn-taking feedback.
+        """
+        if not self._state_machine.is_online or not command_text or not command_text.strip():
+            return None
+
+        command_text = command_text.strip()
+        logger.info("Executing text interaction: %s", command_text)
+
+        # Visual feedback: THINKING
+        self._state_machine.transition_to(
+            AssistantState.THINKING,
+            f"Processing: \"{command_text}\"",
+        )
+        from PySide6.QtCore import QCoreApplication
+        QCoreApplication.processEvents()
+
+        # Pause continuous listener while executing and speaking
+        if hasattr(self, "_continuous_listener"):
+            self._continuous_listener.pause_listening()
+
+        try:
+            res = self._pipeline.execute_pipeline(command_text, is_online=True)
+
+            if not res.success:
+                self._state_machine.trigger_error_feedback(res.error_message or "Execution failed.")
+                return res
+
+            # Sequential Turn-Taking Speech Output (Miss Minutes then Jarvis) in daemon thread
+            import threading
+            def _speak_responses():
+                try:
+                    if res.miss_minutes_response:
+                        self._voice_service.speak_text_blocking(
+                            res.miss_minutes_response,
+                            agent_name="miss_minutes",
+                            language="te",
+                        )
+                    if res.jarvis_response:
+                        import time
+                        time.sleep(0.2)
+                        self._voice_service.speak_text_blocking(
+                            res.jarvis_response,
+                            agent_name="jarvis",
+                            language="te",
+                        )
+                except Exception as exc:
+                    logger.debug("Text interaction speech error: %s", exc)
+
+            threading.Thread(target=_speak_responses, daemon=True).start()
+
+            # Check quiet mode
+            intent_type = res.intent.intent.value if hasattr(res.intent, "intent") else ""
+            if intent_type == "QUIET_STANDBY":
+                if hasattr(self, "_continuous_listener"):
+                    self._continuous_listener.set_quiet(True)
+                self._state_machine.transition_to(
+                    AssistantState.IDLE,
+                    "Quiet Standby. (Say 'matladu' or click to resume)",
+                )
+            elif intent_type == "RESUME_LISTENING":
+                if hasattr(self, "_continuous_listener"):
+                    self._continuous_listener.set_quiet(False)
+                self._state_machine.trigger_success_feedback("Ready and listening...")
+            else:
+                self._state_machine.trigger_success_feedback(
+                    f"Done! {res.miss_minutes_response or 'Task executed successfully.'}",
+                )
+
+            return res
+
+        finally:
+            if hasattr(self, "_continuous_listener"):
+                self._continuous_listener.resume_listening()
+
 
     def run_capability_demo(
         self,
@@ -479,10 +553,17 @@ class MissMinutesApp(QObject):
         """Presents signature modern Telugu + English turn-taking greeting on startup."""
         if not self._state_machine.is_online:
             return
-        mm_text = "Hey! Nenu Miss Minutes ni. Enti ivala chala workload undhi anukunta! Neeku eh help kaavalo cheppu, seconds lo complete chesi pedathanu."
-        jarvis_text = "Exactly ma'am. Jarvis here, systems fully operational. Just command ivvandi sir, seconds lo take care chestham."
-        self._voice_service.speak_turn_taking(mm_text, jarvis_text, language="te")
+        import threading
+        def _speak():
+            mm_text = "Hey! Nenu Miss Minutes ni. Enti ivala chala workload undhi anukunta! Neeku eh help kaavalo cheppu, seconds lo complete chesi pedathanu."
+            jarvis_text = "Exactly ma'am. Jarvis here, systems fully operational. Just command ivvandi sir, seconds lo take care chestham."
+            try:
+                self._voice_service.speak_turn_taking(mm_text, jarvis_text, language="te")
+            except Exception as e:
+                logger.debug("Welcome dialogue error: %s", e)
+        threading.Thread(target=_speak, daemon=True).start()
         self._state_machine.transition_to(AssistantState.IDLE, "Ready and listening...")
+
 
     def show(self) -> None:
         """Presents both overlay and controller on screen and activates hands-free listening."""
