@@ -1,129 +1,171 @@
 """
-jarvis_brain.py - Hybrid Cloud + Offline AI Brain with Rate Limit Failover
-Uses free Groq endpoints for ultra-fast responses, and smoothly falls back
-to offline local processing if API rate limits or network issues occur.
+jarvis_brain.py - Jarvis AI Brain (Gemini Primary, Groq Fallback, Security Integrated).
+
+EVOLUTION & REFACTORING:
+- Upgraded to use AIProvider abstraction (Google Gemini primary via google-genai, Groq fallback).
+- Preserves Jarvis's calm, technically precise, dry-witted personality and concise delivery.
+- Preserves rate limit detection, cooldown failover, and local capability fallbacks.
+- Fully supports Telugu, English, and code-switched technical inquiries.
+- Integrates seamlessly with jarvis_actions.py for security-validated capability planning.
 """
 
+from __future__ import annotations
+
+import logging
 import os
-import json
-import time
 import re
-from openai import OpenAI
+import time
+from typing import Any, Dict, List, Optional
+
 import jarvis_actions
+from ai.provider import AIProvider, ModelConfig, ProviderResponse
+from ai.gemini_provider import GeminiProvider
+from ai.groq_provider import GroqProvider
+from ai.mock_provider import MockAIProvider
+from ai.prompts import JARVIS_SYSTEM_PROMPT
+from actions.schemas import CapabilityRequest
+
+logger = logging.getLogger(__name__)
 
 KEYFILE = os.path.expanduser("~/.openjarvis/free.key")
-MODELS = ["openai/gpt-oss-20b", "llama-3.3-70b-versatile", "qwen/qwen3.8-27b"]
+DEFAULT_GROQ_MODELS = ["llama-3.3-70b-versatile"]
 
-_client = None
-_history = []
-_cooldown_until = 0.0
+_provider: Optional[AIProvider] = None
+_history: List[Dict[str, str]] = []
+_cooldown_until: float = 0.0
 
-SYSTEM_PROMPT = """You are Jarvis, a fast, highly capable AI executive assistant running on the user's computer.
-Respond concisely in 1-2 sentences. Be direct, helpful, and natural. Do not use filler or formal corporate jargon.
-"""
+# Jarvis persona prompt preserved and refined
+SYSTEM_PROMPT = JARVIS_SYSTEM_PROMPT
 
 
-def _get_api_key():
+from ai.fallback_provider import ResilientAIProvider
+
+
+def _get_api_key() -> Optional[str]:
+    """Retrieves API key from environment or local keyfile."""
+    if os.environ.get("GEMINI_API_KEY"):
+        return os.environ["GEMINI_API_KEY"].strip()
     if os.environ.get("GROQ_API_KEY"):
         return os.environ["GROQ_API_KEY"].strip()
     if os.path.exists(KEYFILE):
-        return open(KEYFILE).read().strip()
+        try:
+            return open(KEYFILE).read().strip()
+        except OSError:
+            pass
     return None
 
 
-def ready():
-    """Returns True if the cloud brain is active and not currently rate-limited."""
-    key = _get_api_key()
-    if not key:
-        return False
+def get_ai_provider() -> AIProvider:
+    """Returns the active AI provider, using ResilientAIProvider (Gemini -> Groq -> Mock)."""
+    global _provider
+    if _provider is not None:
+        return _provider
+
+    primary: Optional[AIProvider] = None
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    if gemini_key and gemini_key.strip():
+        primary = GeminiProvider(api_key=gemini_key.strip(), default_model=gemini_model)
+
+    secondary: Optional[AIProvider] = None
+    groq_key = os.environ.get("GROQ_API_KEY") or _get_api_key()
+    if groq_key and groq_key.strip():
+        secondary = GroqProvider(api_key=groq_key.strip())
+
+    fallback = MockAIProvider(
+        default_text_response="All parameters verified, sir. Standing by for your instructions."
+    )
+
+    _provider = ResilientAIProvider(
+        primary=primary,
+        secondary=secondary,
+        fallback=fallback,
+    )
+    return _provider
+
+
+def set_ai_provider(provider: AIProvider) -> None:
+    """Explicitly injects an AI provider (e.g. for testing)."""
+    global _provider
+    _provider = provider
+
+
+def ready() -> bool:
+    """Returns True if the cloud brain is active and not in cooldown."""
     return time.time() >= _cooldown_until
 
 
-def _is_rate_limited(e):
-    status = getattr(e, "status_code", None)
-    if status == 429:
-        return True
-    s = str(e).lower()
-    return any(w in s for w in ("429", "rate limit", "too many requests", "rate_limit", "exceeded"))
-
-
-def _retry_after_seconds(e, default=60):
-    s = str(e).lower()
-    m = re.search(r"try again in\s*(\d+)m\s*([0-9]+(?:\.[0-9]+)?)s", s)
-    if m:
-        return int(float(m.group(1)) * 60 + float(m.group(2))) + 2
-    m = re.search(r"try again in\s*([0-9]+(?:\.[0-9]+)?)s", s)
-    if m:
-        return int(float(m.group(1))) + 2
-    return default
-
-
-def _set_cooldown(secs):
+def _set_cooldown(secs: float) -> None:
     global _cooldown_until
     _cooldown_until = max(_cooldown_until, time.time() + float(secs))
 
 
-def _local_fallback(q):
+def _local_fallback(q: str, is_online: bool = True) -> str:
     """
-    Called when Groq API is temporarily rate-limited.
+    Called when cloud AI is rate-limited or unconfigured.
     Provides immediate local action execution or cached briefing without crashing.
     """
-    # 1. Try deterministic local actions first
-    action_res = jarvis_actions.try_action(q)
+    action_res = jarvis_actions.try_action(q, is_online=is_online)
     if action_res:
         return action_res
 
-    # 2. General intelligent local response
     return (
-        "Cloud API is cooling down, but my local assistant is active. "
-        "I can open your apps, check WhatsApp, or analyze stock charts for you."
+        "Cloud API is offline or cooling down, sir, but local system diagnostics are fully active. "
+        "I can launch applications, provide market summaries, or prepare media streams."
     )
 
 
-def think(q):
-    """
-    Main entry point for queries. Tries local actions first, then cloud AI,
-    with automatic fallback if rate limited.
-    """
-    global _client, _history
+def plan_capability(q: str) -> Optional[CapabilityRequest]:
+    """Delegates to jarvis_actions to generate a typed CapabilityRequest."""
+    return jarvis_actions.plan_capability(q)
 
-    # 1. Immediate local action check
-    local_done = jarvis_actions.try_action(q)
+
+def think(q: str, is_online: bool = True, context: Optional[Any] = None) -> str:
+    """
+    Main reasoning entry point for queries.
+    Tries local actions first, then AI provider, with automatic fallback if rate-limited.
+    """
+    global _history
+
+    # 1. Master OFFLINE Gate
+    if not is_online:
+        return "Assistant is OFFLINE, sir. Systems are locked and standing down."
+
+    # 2. Immediate deterministic action check
+    local_done = jarvis_actions.try_action(q, is_online=is_online)
     if local_done:
         return local_done
 
-    key = _get_api_key()
-    if not key or time.time() < _cooldown_until:
-        return _local_fallback(q)
+    if time.time() < _cooldown_until:
+        return _local_fallback(q, is_online=is_online)
 
-    if _client is None:
-        _client = OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1")
+    provider = get_ai_provider()
+    if not provider.is_available():
+        return _local_fallback(q, is_online=is_online)
 
-    msgs = [{"role": "system", "content": SYSTEM_PROMPT}] + _history[-6:] + [{"role": "user", "content": q}]
+    cfg = ModelConfig(
+        system_instruction=SYSTEM_PROMPT,
+        temperature=0.5,
+        max_tokens=350,
+    )
 
-    for model in MODELS:
-        try:
-            resp = _client.chat.completions.create(
-                model=model,
-                messages=msgs,
-                max_tokens=350,
-                temperature=0.6,
-            )
-            answer = resp.choices[0].message.content.strip()
-            _history += [{"role": "user", "content": q}, {"role": "assistant", "content": answer}]
-            return answer
-        except Exception as e:
-            if _is_rate_limited(e):
-                wait_sec = _retry_after_seconds(e)
-                _set_cooldown(wait_sec)
-                print(f"[Rate-limit triggered: cooldown for {wait_sec}s]")
-                return _local_fallback(q)
-            print(f"[Model {model} failed: {e}]")
+    history_msgs = list(_history)
+    history_msgs.append({"role": "user", "content": q})
 
-    return _local_fallback(q)
-
-
-if __name__ == "__main__":
-    print("Testing Jarvis Brain...")
-    print(think("what time is it"))
-    print(think("how are you"))
+    try:
+        resp = provider.generate_chat_response(history_msgs, config=cfg)
+        answer = resp.content.strip()
+        _history.append({"role": "user", "content": q})
+        _history.append({"role": "assistant", "content": answer})
+        max_turns = int(os.environ.get("MAX_CONVERSATION_TURNS", "10"))
+        if len(_history) > max_turns * 2:
+            _history = _history[-(max_turns * 2):]
+        return answer
+    except Exception as exc:
+        err_msg = str(exc).lower()
+        if any(w in err_msg for w in ("429", "rate limit", "quota", "too many requests")):
+            _set_cooldown(60.0)
+            logger.warning("Rate-limit triggered on AI provider, cooling down for 60s: %s", exc)
+        else:
+            logger.error("AI provider reasoning failed: %s", exc)
+        return _local_fallback(q, is_online=is_online)

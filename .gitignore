@@ -1,0 +1,30 @@
+# Environment variables & secrets
+.env
+*.env
+!.env.example
+*.key
+free.key
+.openjarvis/
+
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Testing & linting
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# OS artifacts
+Thumbs.db
+Desktop.ini
+.DS_Store

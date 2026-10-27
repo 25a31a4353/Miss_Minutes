@@ -1,100 +1,58 @@
 """
-jarvis_voice.py - Live Speech Recognition & Audio Response Loop
-Listens continuously through your microphone, processes commands, and speaks back.
+jarvis_voice.py - Jarvis Audio & Speech Interface (Shared Voice Integration).
+
+EVOLUTION & REFACTORING:
+- Removed macOS say command and blocking infinite microphone loop.
+- Integrated with shared voice/ infrastructure and Jarvis's distinct voice profile
+  (en-GB-RyanNeural / te-IN-MohanNeural).
+- Respects the master OFFLINE gate.
 """
 
-import sys
-import os
-import subprocess
-import time
-import speech_recognition as sr
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
 import jarvis_brain
+from voice.voices import get_voice_profile, JARVIS_VOICE_PROFILE
+from voice.tts import TextToSpeechProvider, MockTTSProvider, TTSAudioResult
+from voice.service import VoiceService
+
+logger = logging.getLogger(__name__)
+
+_voice_service: Optional[VoiceService] = None
 
 
-def speak(text):
-    """Speaks output aloud using native macOS speech or prints if headless."""
+def get_voice_service() -> VoiceService:
+    global _voice_service
+    if _voice_service is None:
+        _voice_service = VoiceService(is_assistant_online=True)
+    return _voice_service
+
+
+def set_voice_service(service: VoiceService) -> None:
+    global _voice_service
+    _voice_service = service
+
+
+def speak(text: str, language: str = "en", is_online: bool = True) -> Optional[TTSAudioResult]:
+    """
+    Speaks output aloud using Jarvis's distinct voice profile.
+    Guarantees:
+    - Never executes if assistant is OFFLINE.
+    - Uses Jarvis's British/formal voice profile (en-GB-RyanNeural / te-IN-MohanNeural).
+    """
     if not text:
-        return
-    print(f"\n[JARVIS]: {text}\n")
-    if sys.platform == "darwin":
-        # Native macOS high-speed, natural voice
-        subprocess.run(["say", "-v", "Samantha", text])
-    else:
-        # Cross-platform fallback
-        try:
-            import pyttsx3
-            engine = pyttsx3.init()
-            engine.say(text)
-            engine.runAndWait()
-        except Exception:
-            pass
+        return None
 
+    if not is_online:
+        logger.info("Jarvis audio synthesis blocked: Assistant is OFFLINE.")
+        return None
 
-def listen_loop():
-    recognizer = sr.Recognizer()
-    recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 0.8
-
+    svc = get_voice_service()
+    svc.set_online(is_online)
     try:
-        mic = sr.Microphone()
-    except Exception as e:
-        print(f"Error accessing microphone: {e}")
-        print("Falling back to text console input mode.")
-        while True:
-            try:
-                user_input = input("You: ")
-                if user_input.strip():
-                    reply = jarvis_brain.think(user_input)
-                    speak(reply)
-            except (KeyboardInterrupt, EOFError):
-                break
-        return
-
-    with mic as source:
-        print("\n" + "=" * 50)
-        print("  JARVIS AI ASSISTANT IS ACTIVE AND LISTENING")
-        print("  Say commands like:")
-        print("    - 'Jarvis, open VS Code'")
-        print("    - 'Play lofi on YouTube'")
-        print("    - 'Stock market update' / 'Analyze Nifty'")
-        print("    - 'Send WhatsApp message'")
-        print("    - 'Read unread emails'")
-        print("=" * 50 + "\n")
-        recognizer.adjust_for_ambient_noise(source, duration=1.0)
-
-    while True:
-        try:
-            with mic as source:
-                print("Listening... ", end="", flush=True)
-                audio = recognizer.listen(source, timeout=10, phrase_time_limit=8)
-            print("Processing... ", end="", flush=True)
-
-            query = recognizer.recognize_google(audio).strip()
-            print(f"\nYou said: \"{query}\"")
-
-            # Wake word filter (optional - answers directly or to "Jarvis")
-            q_clean = query.lower()
-            if "jarvis" in q_clean:
-                q_clean = q_clean.replace("jarvis", "").strip(" ,.!?")
-
-            if not q_clean:
-                speak("Yes sir, I'm listening.")
-                continue
-
-            response = jarvis_brain.think(q_clean)
-            speak(response)
-
-        except sr.WaitTimeoutError:
-            continue
-        except sr.UnknownValueError:
-            continue
-        except KeyboardInterrupt:
-            print("\nShutting down Jarvis. Goodbye!")
-            break
-        except Exception as e:
-            print(f"\n[Notice]: {e}")
-            time.sleep(0.5)
-
-
-if __name__ == "__main__":
-    listen_loop()
+        return svc.speak_text(text, agent_name="jarvis", language=language)
+    except Exception as exc:
+        logger.warning("Jarvis speech synthesis warning: %s", exc)
+        return None
